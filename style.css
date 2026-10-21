@@ -27,3 +27,4 @@ h2{font-size:1rem;margin:6px 0}h2 small{font-weight:400;opacity:.7}
 #editor span.fix,.fixkey{background:#1a9b5a30;border-bottom:2px solid var(--fix)}
 select{padding:9px;border-radius:8px;border:1px solid #8886;background:var(--card);color:var(--ink)}
 #out{margin-bottom:6px}
+#ai{font-size:.85rem}#ai summary{cursor:pointer;font-weight:600;margin-bottom:6px}#ai input{padding:8px;border-radius:8px;border:1px solid #8886;background:var(--card);color:var(--ink);margin:6px 0}#ai a{color:var(--acc)}

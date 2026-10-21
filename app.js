@@ -63,21 +63,72 @@ function binarize(g, w, h, c) { // adaptive (local-mean) threshold using an inte
   return ink;
 }
 
-/* 4 + 5 · Detection & line / word segmentation (projection profiles) */
-function segment(ink, w, h) {
-  const rows = new Uint32Array(h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) rows[y] += ink[y * w + x];
-  const thr = Math.max(2, w * 0.004), found = []; let s = -1, gap = 0;
-  for (let y = 0; y <= h; y++) {
-    if (y < h && rows[y] > thr) { if (s < 0) s = y; gap = 0; }
-    else if (s >= 0 && (++gap > 8 || y === h)) { found.push([s, y - gap]); s = -1; }
+function flatten(g, w, h) { // illumination correction: divide by a heavily blurred background (removes shadows / uneven light)
+  const W = w + 1, I = new Float64Array(W * (h + 1)), o = new Float32Array(g.length), r = Math.max(25, w >> 4);
+  for (let y = 0; y < h; y++) { let row = 0;
+    for (let x = 0; x < w; x++) { row += g[y * w + x]; I[(y + 1) * W + x + 1] = I[y * W + x + 1] + row; } }
+  for (let y = 0; y < h; y++) { const y0 = Math.max(0, y - r), y1 = Math.min(h, y + r + 1);
+    for (let x = 0; x < w; x++) { const x0 = Math.max(0, x - r), x1 = Math.min(w, x + r + 1);
+      const m = (I[y1 * W + x1] - I[y0 * W + x1] - I[y1 * W + x0] + I[y0 * W + x0]) / ((x1 - x0) * (y1 - y0));
+      o[y * w + x] = Math.min(255, g[y * w + x] / Math.max(1, m) * 235); } }
+  return o;
+}
+function despeckle(ink, w, h, minA) { // remove tiny isolated ink blobs (noise specks) via connected components
+  const seen = new Uint8Array(w * h), q = new Int32Array(w * h); let removed = 0;
+  for (let i = 0; i < ink.length; i++) {
+    if (!ink[i] || seen[i]) continue;
+    let head = 0, tail = 0; q[tail++] = i; seen[i] = 1;
+    while (head < tail) { const p = q[head++], x = p % w, y = (p / w) | 0;
+      for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= h) continue;
+        for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx < 0 || xx >= w) continue;
+          const n = yy * w + xx; if (ink[n] && !seen[n]) { seen[n] = 1; q[tail++] = n; } } } }
+    if (tail < minA) { for (let k = 0; k < tail; k++) ink[q[k]] = 0; removed++; }
   }
+  return removed;
+}
+function dropRules(ink, w, h) { // remove long horizontal lines (notebook rules / underlines), keep strokes that cross them
+  const minL = Math.round(w * 0.15); let n = 0;
+  for (let y = 0; y < h; y++) { let x = 0;
+    while (x < w) {
+      if (ink[y * w + x] !== 1) { x++; continue; }
+      const s = x; while (x < w && ink[y * w + x] === 1) x++;
+      if (x - s >= minL) for (let k = s; k < x; k++) {
+        const up = y >= 5 && ink[(y - 5) * w + k] === 1, dn = y + 5 < h && ink[(y + 5) * w + k] === 1;
+        if (!(up && dn)) { ink[y * w + k] = 2; n++; } }
+    } }
+  for (let i = 0; i < ink.length; i++) if (ink[i] === 2) ink[i] = 0;
+  return n;
+}
+
+/* 4 + 5 · Detection & line / word segmentation (projection profile + line-pitch autocorrelation) */
+function segment(ink, w, h) {
+  const m = Math.round(w * 0.03), rows = new Float32Array(h), sm = new Float32Array(h);
+  for (let y = 0; y < h; y++) { let s = 0; for (let x = m; x < w - m; x++) s += ink[y * w + x]; rows[y] = s; }
+  for (let y = 0; y < h; y++) { let s = 0, c = 0; for (let j = Math.max(0, y - 4); j <= Math.min(h - 1, y + 4); j++) { s += rows[j]; c++; } sm[y] = s / c; }
+  let mx = 0; for (const v of sm) if (v > mx) mx = v;
+  const th = Math.max(1, mx * 0.08); let top = 0, bot = h - 1;
+  while (top < h && sm[top] < th) top++; while (bot > top && sm[bot] < th) bot--;
+  if (bot - top < 20) return [];
+  let mean = 0; for (let y = top; y <= bot; y++) mean += sm[y]; mean /= bot - top + 1;
+  const maxLag = Math.min(250, ((bot - top) / 2) | 0), c = new Float64Array(maxLag + 2); let cm = 0;
+  for (let l = 20; l <= maxLag; l++) { let s = 0; for (let y = top; y + l <= bot; y++) s += (sm[y] - mean) * (sm[y + l] - mean); c[l] = s; if (s > cm) cm = s; }
+  let P = 0; for (let l = 21; l < maxLag; l++) if (c[l] > 0.6 * cm && c[l] >= c[l - 1] && c[l] >= c[l + 1]) { P = l; break; }
+  const bands = [];
+  if (!P) bands.push([top, bot]);
+  else { let pos = top; // cut at the valley of the profile about one line-pitch below the previous line start
+    while (pos < bot) {
+      while (pos < bot && sm[pos] < th) pos++;
+      if (pos + P * 1.5 >= bot) { bands.push([pos, bot]); break; }
+      let mi = Math.round(pos + P * 0.6); const b = Math.min(bot, Math.round(pos + P * 1.4));
+      for (let y = mi; y <= b; y++) if (sm[y] < sm[mi]) mi = y;
+      bands.push([pos, mi - 1]); pos = mi;
+    } }
   const out = [];
-  for (const [y0, y1] of found) {
+  for (const [y0, y1] of bands) {
     if (y1 - y0 < 14) continue;
     const cols = new Uint32Array(w);
-    for (let y = y0; y <= y1; y++) for (let x = 0; x < w; x++) cols[x] += ink[y * w + x];
-    const g = Math.max(12, (y1 - y0) * 0.5), words = []; let ws = -1, gp = 0;
+    for (let y = y0; y <= y1; y++) for (let x = m; x < w - m; x++) cols[x] += ink[y * w + x];
+    const g = Math.max(12, (y1 - y0) * 0.35), words = []; let ws = -1, gp = 0;
     for (let x = 0; x <= w; x++) {
       if (x < w && cols[x] > 0) { if (ws < 0) ws = x; gp = 0; }
       else if (ws >= 0 && (++gp > g || x === w)) { if (x - gp - ws > 4) words.push([ws, x - gp]); ws = -1; }
@@ -88,9 +139,9 @@ function segment(ink, w, h) {
 }
 
 /* 6/7 · OCR helper (one Tesseract worker, line-by-line) */
-async function recognise(langs, crops, onProg) {
+async function recognise(langs, crops, onProg, psm = "7") {
   const wk = await Tesseract.createWorker(langs, 1);
-  await wk.setParameters({ tessedit_pageseg_mode: "7" });
+  await wk.setParameters({ tessedit_pageseg_mode: psm });
   const res = [];
   for (let i = 0; i < crops.length; i++) { res.push((await wk.recognize(crops[i])).data); onProg(i + 1, crops.length); }
   await wk.terminate(); return res;
@@ -100,6 +151,38 @@ function cropLine(src, L, w, h) {
   const s = 96 / ch, c = document.createElement("canvas"); c.width = Math.max(1, cw * s); c.height = 96;
   const t = c.getContext("2d"); t.fillStyle = "#fff"; t.fillRect(0, 0, c.width, c.height);
   t.drawImage(src, x0, y0, cw, ch, 0, 0, c.width, c.height); return c;
+}
+
+const mk = x => ({ t: x.text.trim(), c: x.confidence });
+const lineWords = d => (d.words && d.words.length ? d.words : (d.text || "").split(/\s+/).filter(Boolean).map(t => ({ text: t, confidence: d.confidence })))
+  .filter(x => x.text.trim()).map(mk);
+const pageLines = d => d.lines && d.lines.length ? d.lines.map(l => l.words.filter(x => x.text.trim()).map(mk)).filter(l => l.length)
+  : (d.text || "").split("\n").map(s => s.trim()).filter(Boolean).map(s => s.split(/\s+/).map(t => ({ t, c: d.confidence })));
+
+/* Optional AI engine: Google Gemini (user pastes own free API key; stays in this browser) */
+const MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite"]; // tried in order
+const gkey = () => $("gkey").value.trim();
+try { $("gkey").value = localStorage.getItem("gkey") || ""; } catch (e) {}
+$("gkey").oninput = () => { try { localStorage.setItem("gkey", gkey()); } catch (e) {} };
+async function gemini(key, parts, json) {
+  let err = "";
+  for (const m of MODELS) {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent`, {
+      method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0, ...(json ? { responseMimeType: "application/json" } : {}) } }) });
+    const j = await r.json(), msg = (j.error && j.error.message) || "";
+    if (r.status === 404 || (r.status === 400 && /models\//.test(msg))) { err = msg; continue; } // model not available -> next
+    if (!r.ok) throw new Error(msg || r.statusText);
+    return j.candidates[0].content.parts.map(p => p.text || "").join("");
+  }
+  throw new Error("No Gemini model available: " + err);
+}
+async function geminiRead(cv, key) {
+  const prompt = 'Transcribe ALL handwritten text in this image exactly as written, line by line, in reading order. The text may be Tamil, English or both: keep Tamil in Tamil script and English in English. Do not translate, do not correct spelling, ignore watermarks and printed marks. Reply ONLY with JSON: {"lines":[{"text":"...","unsure":["words you are not sure about"]}]}';
+  const out = await gemini(key, [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: cv.toDataURL("image/jpeg", 0.9).split(",")[1] } }], true);
+  const js = JSON.parse(out.replace(/```json|```/g, "").trim());
+  return js.lines.map(l => { const un = new Set((l.unsure || []).map(s => String(s).toLowerCase()));
+    return String(l.text).split(/\s+/).filter(Boolean).map(t => ({ t, c: un.has(t.toLowerCase().replace(/[.,!?;:]+$/, "")) ? 45 : 95 })); }).filter(l => l.length);
 }
 
 /* MAIN PIPELINE */
@@ -118,12 +201,14 @@ $("run").onclick = async () => {
       (q.issues.length ? "⚠ " + q.issues.join(", ") + " – settings adjusted automatically." : "✔ Image quality looks good.");
     mark(1, "done"); mark(2, "run"); await tick();
 
-    const clean = median3(gray, w, h);
+    const clean = flatten(median3(gray, w, h), w, h);
     if (q.std < 45) { // contrast stretch for faint images
       let lo = 255, hi = 0; for (const v of clean) { if (v < lo) lo = v; if (v > hi) hi = v; }
       for (let i = 0; i < clean.length; i++) clean[i] = (clean[i] - lo) * 255 / Math.max(1, hi - lo);
     }
     const ink = binarize(clean, w, h, q.low ? 0.07 : 0.14);
+    const rules = dropRules(ink, w, h), specks = despeckle(ink, w, h, Math.max(6, Math.round(w * h / 250000)));
+    $("quality").innerHTML += `<br><b>Cleaning:</b> shadows flattened, ${specks} noise specks &amp; ${rules} ruled-line pixels removed.`;
     const pc = $("proc"); pc.width = w; pc.height = h;
     const pctx = pc.getContext("2d"), id = pctx.createImageData(w, h);
     for (let i = 0; i < ink.length; i++) { const v = ink[i] ? 0 : 255; id.data.set([v, v, v, 255], 4 * i); }
@@ -139,19 +224,34 @@ $("run").onclick = async () => {
     const crops = segs.map(L => cropLine(bin, L, w, h));
     mark(4, "done"); mark(5, "run"); await tick();
 
-    // Language identification: quick pre-pass on up to 3 lines
-    const sample = crops.slice(0, 3);
-    const pre = await recognise("eng+tam", sample, (i, n) => $("bar").value = 10 * i / n);
-    const txt = pre.map(d => d.text).join(""), ta = (txt.match(TAMIL) || []).length, la = (txt.match(LATIN) || []).length;
-    const share = ta / Math.max(1, ta + la), langs = share < 0.1 ? "eng" : "tam+eng";
-    $("langinfo").innerHTML = `<b>Detected language:</b> ${share > 0.7 ? "Tamil" : share < 0.1 ? "English" : "Tamil + English (mixed)"} (Tamil share ${(share * 100) | 0}%)`;
-    mark(5, "done"); mark(6, "run");
+    const key = gkey();
+    if (key) { // Gemini AI engine: reads Tamil + English handwriting, flags unsure words
+      $("langinfo").textContent = "Reading handwriting with Gemini AI…"; $("bar").value = 40; mark(5, "done"); mark(6, "run");
+      lines = await geminiRead(cv, key);
+      const all = lines.flat().map(w => w.t).join(""), ta = (all.match(TAMIL) || []).length, la = (all.match(LATIN) || []).length, sh = ta / Math.max(1, ta + la);
+      $("langinfo").innerHTML = `<b>Detected language:</b> ${sh > 0.7 ? "Tamil" : sh < 0.1 ? "English" : "Tamil + English (mixed)"} · engine: Gemini AI<br>Lines: ${lines.length} · words: ${lines.flat().length}`;
+      $("bar").value = 100; mark(6, "done"); mark(7, "run"); await tick();
+    } else {
+      // Language identification: quick pre-pass on up to 3 lines
+      const sample = crops.slice(0, 3);
+      const pre = await recognise("eng+tam", sample, (i, n) => $("bar").value = 10 * i / n);
+      const txt = pre.map(d => d.text).join(""), ta = (txt.match(TAMIL) || []).length, la = (txt.match(LATIN) || []).length;
+      const share = ta / Math.max(1, ta + la), langs = txt.trim() && share < 0.1 ? "eng" : "tam+eng";
+      $("langinfo").innerHTML = `<b>Detected language:</b> ${share > 0.7 ? "Tamil" : share < 0.1 ? "English" : "Tamil + English (mixed)"} (Tamil share ${(share * 100) | 0}%)`;
+      mark(5, "done"); mark(6, "run");
 
-    const data = await recognise(langs, crops, (i, n) => $("bar").value = 10 + 90 * i / n);
-    lines = data.map(d => (d.words || []).filter(x => x.text.trim()).map(x => ({ t: x.text.trim(), c: x.confidence })));
-    mark(6, "done"); mark(7, "run"); await tick();
+      const data = await recognise(langs, crops, (i, n) => $("bar").value = 10 + 90 * i / n);
+      lines = data.map(lineWords).filter(l => l.length);
+      if (!lines.length) { // line-by-line gave nothing -> let Tesseract read the whole page
+        const d = await recognise(langs, [bin], () => $("bar").value = 95, "6"); lines = pageLines(d[0]);
+      }
+      if (!lines.length) throw new Error("Nothing could be recognised. Try a clearer, darker photo.");
+      $("langinfo").innerHTML += `<br>Lines detected: ${segs.length} · words recognised: ${lines.flat().length}`;
+      mark(6, "done"); mark(7, "run"); await tick();
+    }
     renderEditor(); flag(); mark(7, "done"); mark(9, "done");
     ["spell", "tr", "txt", "doc", "pdf"].forEach(b => $(b).disabled = false);
+    await translateAll(); // translate the full page automatically
   } catch (e) { alert(e.message); }
   $("run").disabled = false;
 };
@@ -189,24 +289,36 @@ $("spell").onclick = async () => {
 };
 
 /* 11 · Translation (MyMemory free API, line by line; source language detected per line by script) */
-$("tr").onclick = async () => {
+async function translateAll() {
   const tgt = $("tl").value, out = $("out"); out.innerHTML = ""; mark(10, "run"); $("tr").disabled = true;
-  const rows = [...$("editor").children].map(d => d.innerText.trim()).filter(Boolean);
+  const rows = [...$("editor").children].map(d => d.innerText.trim()).filter(Boolean), chunks = [];
+  for (const r of rows) { // join neighbouring lines of the same script into chunks (<450 chars) -> whole page, better context
+    const src = /[\u0B80-\u0BFF]/.test(r) ? "ta" : "en", last = chunks.at(-1);
+    if (last && last.src === src && last.text.length + r.length < 450) last.text += " " + r; else chunks.push({ src, text: r.slice(0, 480) });
+  }
   let fail = 0;
-  for (const line of rows) {
-    const src = /[\u0B80-\u0BFF]/.test(line) ? "ta" : "en", p = document.createElement("div");
-    out.append(p);
-    if (src === tgt) { p.textContent = line; continue; }
+  if (gkey() && rows.length) { // Gemini: translate the whole page in one go (understands context, fixes small OCR errors)
     try {
-      const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(line.slice(0, 480))}&langpair=${src}|${tgt}`);
+      const tr = await gemini(gkey(), [{ text: `Translate the following text into ${$("tl").selectedOptions[0].text}. It was read from handwriting and may contain small recognition errors, so infer the intended meaning. Keep the line/paragraph structure. Output ONLY the translation.\n\n${rows.join("\n")}` }]);
+      tr.split("\n").filter(s => s.trim()).forEach(s => { const p = document.createElement("p"); p.textContent = s; out.append(p); });
+      $("trinfo").textContent = "(full page translated by Gemini AI)"; mark(10, "done"); $("tr").disabled = false; return;
+    } catch (e) { fail = 1; out.innerHTML = ""; $("trinfo").textContent = "(Gemini failed: " + e.message + " – using free translator)"; }
+  }
+  for (const ch of chunks) {
+    const p = document.createElement("p"); out.append(p);
+    if (ch.src === tgt) { p.textContent = ch.text; continue; }
+    try {
+      const r = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(ch.text)}&langpair=${ch.src}|${tgt}`);
       const j = await r.json();
       if (j.responseStatus != 200) throw new Error(j.responseDetails);
       p.textContent = j.responseData.translatedText;
-    } catch (e) { p.textContent = "⚠ " + line; fail++; }
+    } catch (e) { p.textContent = "⚠ " + ch.text; fail++; }
   }
-  $("trinfo").textContent = fail ? `(${fail} line(s) failed – daily free limit or network)` : "(translated)";
+  if (!($("trinfo").textContent.startsWith("(Gemini failed"))) $("trinfo").textContent = fail ? `(${fail} part(s) failed – daily free limit or network)` : "(full page translated)";
   mark(10, "done"); $("tr").disabled = false;
-};
+}
+$("tr").onclick = translateAll;
+$("tl").onchange = () => { if (!$("tr").disabled) translateAll(); };
 
 /* 12 · Export */
 const text = () => [...$("editor").children].map(d => d.innerText.trim()).join("\n") +

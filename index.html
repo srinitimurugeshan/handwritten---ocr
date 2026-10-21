@@ -16,6 +16,9 @@
     <label class="btn">1 · Upload image<input type="file" id="file" accept="image/*" hidden></label>
     <label>Uncertain-word threshold: <b id="tv">70</b>%
       <input type="range" id="thr" min="30" max="95" value="70"></label>
+    <details id="ai" open><summary>AI engine – accurate Tamil &amp; translation (optional)</summary>
+      <input type="password" id="gkey" placeholder="Paste Gemini API key" autocomplete="off">
+      <small>Free key: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. Saved only in your browser. With a key, your image is sent to Google.</small></details>
     <button id="run" disabled>Run recognition</button>
     <progress id="bar" value="0" max="100"></progress>
     <ol id="steps"></ol>
@@ -30,7 +33,7 @@
     <div id="editor" contenteditable="true" spellcheck="false"></div>
     <div class="row">
       <button id="spell" disabled>AI spell correction (English)</button>
-      <select id="tl"><option value="en">English</option><option value="ta">Tamil</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ml">Malayalam</option><option value="kn">Kannada</option><option value="fr">French</option><option value="es">Spanish</option><option value="de">German</option></select>
+      <select id="tl"><option value="ta" selected>Tamil (தமிழ்)</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ml">Malayalam</option><option value="kn">Kannada</option><option value="fr">French</option><option value="es">Spanish</option><option value="de">German</option></select>
       <button id="tr" disabled>Translate</button>
       <button id="txt" disabled>Export TXT</button>
       <button id="doc" disabled>Export Word</button>
