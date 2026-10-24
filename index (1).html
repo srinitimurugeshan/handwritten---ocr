@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handwritten Text Recognition and Multilingual Translation System</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="head">
+  <h1>Handwritten Text Recognition and Multilingual Translation System</h1>
+  <p>Upload a handwritten page in Tamil or English. Review the recognised text, translate it and export it.</p>
+</header>
+<main>
+  <aside class="rail">
+    <label class="drop" for="file">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <span><b>Choose a handwritten image</b><small>JPG or PNG, Tamil or English</small></span>
+      <input type="file" id="file" accept="image/*" hidden>
+    </label>
+    <div class="fld"><label for="thr">Flag words below <b id="tv">70</b>% confidence</label>
+      <input type="range" id="thr" min="30" max="95" value="70"></div>
+    <details id="ai">
+      <summary>Gemini AI engine (optional)</summary>
+      <p>Reads cursive and Tamil handwriting more accurately and translates the full page.</p>
+      <input type="password" id="gkey" placeholder="Paste Gemini API key" autocomplete="off" aria-label="Gemini API key">
+      <small>Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>. It is saved only in this browser. With a key, your image is sent to Google.</small>
+    </details>
+    <button id="run" class="primary" disabled>Run recognition</button>
+    <progress id="bar" value="0" max="100"></progress>
+    <h2>Progress</h2>
+    <ol id="steps"></ol>
+    <div id="quality" class="note"></div>
+  </aside>
+  <section class="desk">
+    <figure>
+      <div class="cmp"><img id="orig" alt="Uploaded handwriting"><canvas id="proc"></canvas><div class="ph">Your image appears here after upload</div></div>
+      <input type="range" id="cut" min="0" max="100" value="50" aria-label="Compare original and cleaned image">
+      <figcaption>Original on the left, cleaned image on the right. Drag the slider to compare.</figcaption>
+    </figure>
+    <div id="langinfo" class="note"></div>
+    <article class="sheet">
+      <header><h2>Recognised text</h2>
+        <span class="key"><i class="low"></i>uncertain <i class="fix"></i>corrected</span>
+        <button id="spell" disabled>Correct English spelling</button></header>
+      <div id="editor" contenteditable="true" spellcheck="false" aria-label="Recognised text"></div>
+    </article>
+    <article class="sheet">
+      <header><h2>Translation <small id="trinfo"></small></h2>
+        <select id="tl" aria-label="Translate to">
+          <option value="ta" selected>Tamil (தமிழ்)</option><option value="en">English</option><option value="hi">Hindi</option><option value="te">Telugu</option><option value="ml">Malayalam</option><option value="kn">Kannada</option><option value="fr">French</option><option value="es">Spanish</option><option value="de">German</option>
+        </select>
+        <button id="tr" disabled>Translate</button></header>
+      <div id="out" contenteditable="true" spellcheck="false" aria-label="Translated text"></div>
+    </article>
+    <div class="export"><b>Download</b>
+      <button id="txt" disabled>TXT file</button><button id="doc" disabled>Word file</button><button id="pdf" disabled>PDF</button></div>
+  </section>
+</main>
+<footer>Mini project by Sriniti M (24UVA055), III B.Voc Artificial Intelligence and Machine Learning.</footer>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
